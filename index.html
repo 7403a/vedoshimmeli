@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Printmaker Image Filter</title>
+    <meta name="description" content="A simple tool to convert images into a black and white print-ready format by preserving edges.">
+    <meta name="theme-color" content="#1e1e1e"/>
+
+    <script>
+        // 1. Inline Manifest as a Data URL
+        const manifest = {
+            "name": "Printmaker Filter",
+            "short_name": "Printmaker",
+            "start_url": ".",
+            "display": "standalone",
+            "background_color": "#ffffff",
+            "theme_color": "#1e1e1e",
+            "description": "Convert images for printmaking.",
+            "icons": [{
+                "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwHAAAAaklEQVR42u3BMQEAAADCoPVPbQwfoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4NWH8AAGWWN3cAAAAAElFTkSuQmCC",
+                "sizes": "192x192",
+                "type": "image/png"
+            }]
+        };
+        const manifestURL = 'data:application/json;base64,' + btoa(JSON.stringify(manifest));
+        document.write(`<link rel="manifest" href="${manifestURL}">`);
+
+        // 2. Inline and Register Service Worker
+        if ('serviceWorker' in navigator) {
+            const swContent = `
+                const CACHE_NAME = 'printmaker-cache-v1';
+                const urlsToCache = ['.']; // Cache the root file itself
+
+                self.addEventListener('install', event => {
+                    event.waitUntil(
+                        caches.open(CACHE_NAME).then(cache => cache.addAll(urlsToCache))
+                    );
+                });
+
+                self.addEventListener('fetch', event => {
+                    event.respondWith(
+                        caches.match(event.request).then(response => response || fetch(event.request))
+                    );
+                });
+            `;
+            const swBlob = new Blob([swContent], { type: 'application/javascript' });
+            const swURL = URL.createObjectURL(swBlob);
+            navigator.serviceWorker.register(swURL).catch(error => {
+                console.error('Service Worker registration failed:', error);
+            });
+        }
+    </script>
+
+    <style>
+        :root {
+            --background-color: #f0f0f0;
+            --text-color: #333;
+            --primary-color: #007bff;
+            --border-color: #ccc;
+            --drop-zone-bg: #fff;
+            --drop-zone-hover: #e9e9e9;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--background-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+        }
+
+        .container {
+            max-width: 800px;
+            width: 100%;
+        }
+        
+        h1 {
+            color: var(--text-color);
+        }
+
+        #drop-zone {
+            border: 3px dashed var(--border-color);
+            border-radius: 10px;
+            padding: 3rem;
+            background-color: var(--drop-zone-bg);
+            transition: background-color 0.2s;
+            cursor: pointer;
+        }
+
+        #drop-zone.dragover {
+            background-color: var(--drop-zone-hover);
+            border-color: var(--primary-color);
+        }
+
+        .controls {
+            margin: 1.5rem 0;
+            padding: 1rem;
+            background-color: var(--drop-zone-bg);
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            display: none; /* Hidden by default */
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .control-group label {
+            font-weight: bold;
+            min-width: 120px;
+            text-align: right;
+        }
+
+        input[type="range"] {
+            width: 60%;
+            max-width: 300px;
+        }
+
+        #processed-canvas {
+            display: block;
+            max-width: 100%;
+            margin: 1rem auto;
+            border: 1px solid var(--border-color);
+            background-color: white;
+        }
+
+        button {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            display: none; /* Hidden by default */
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        #file-input {
+            display: none;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>🖼️ Printmaker Image Filter</h1>
+        <p>Drop an image below or click to upload. The process happens entirely in your browser.</p>
+
+        <div id="drop-zone">
+            Click or drop your image here
+        </div>
+        <input type="file" id="file-input" accept="image/*">
+        
+        <div class="controls" id="controls">
+            <div class="control-group">
+                <label for="strength-slider">Edge Strength</label>
+                <input type="range" id="strength-slider" min="10" max="400" value="100">
+            </div>
+            <div class="control-group">
+                <label for="threshold-slider">Threshold</label>
+                <input type="range" id="threshold-slider" min="0" max="255" value="50">
+            </div>
+        </div>
+
+        <canvas id="processed-canvas"></canvas>
+        <button id="download-btn">Download Image</button>
+    </div>
+
+    <script>
+        // DOM Elements
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const controls = document.getElementById('controls');
+        const strengthSlider = document.getElementById('strength-slider');
+        const thresholdSlider = document.getElementById('threshold-slider');
+        const processedCanvas = document.getElementById('processed-canvas');
+        const downloadBtn = document.getElementById('download-btn');
+        const ctx = processedCanvas.getContext('2d');
+
+        let originalImage = null; // To store the loaded image object
+        let sourceImageData = null; // To store the original pixel data
+
+        // Event Listeners
+        dropZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            handleFile(e.dataTransfer.files[0]);
+        });
+        strengthSlider.addEventListener('input', () => applyFilters());
+        thresholdSlider.addEventListener('input', () => applyFilters());
+        downloadBtn.addEventListener('click', downloadImage);
+
+        // --- Core Functions ---
+
+        function handleFile(file) {
+            if (!file || !file.type.startsWith('image/')) {
+                alert('Please select an image file.');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                originalImage = new Image();
+                originalImage.onload = () => {
+                    const tempCanvas = document.createElement('canvas');
+                    const tempCtx = tempCanvas.getContext('2d');
+                    tempCanvas.width = originalImage.width;
+                    tempCanvas.height = originalImage.height;
+                    tempCtx.drawImage(originalImage, 0, 0);
+                    sourceImageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+                    
+                    controls.style.display = 'flex';
+                    downloadBtn.style.display = 'block';
+                    applyFilters();
+                };
+                originalImage.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function applyFilters() {
+            if (!sourceImageData) return;
+
+            const width = sourceImageData.width;
+            const height = sourceImageData.height;
+            processedCanvas.width = width;
+            processedCanvas.height = height;
+
+            const strength = parseFloat(strengthSlider.value) / 100.0; // Acts as a multiplier
+            const threshold = parseInt(thresholdSlider.value);
+
+            const inputData = sourceImageData.data;
+            const outputData = new Uint8ClampedArray(inputData.length);
+            
+            // Grayscale Conversion
+            const grayData = new Uint8ClampedArray(width * height);
+            for (let i = 0; i < inputData.length; i += 4) {
+                const r = inputData[i];
+                const g = inputData[i + 1];
+                const b = inputData[i + 2];
+                const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+                grayData[i / 4] = gray;
+            }
+
+            // Sobel Operator and Thresholding in one loop for efficiency
+            const kx = [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]];
+            const ky = [[-1, -2, -1], [0, 0, 0], [1, 2, 1]];
+            
+            for (let y = 1; y < height - 1; y++) {
+                for (let x = 1; x < width - 1; x++) {
+                    let Gx = 0;
+                    let Gy = 0;
+                    for (let i = -1; i <= 1; i++) {
+                        for (let j = -1; j <= 1; j++) {
+                            const pixelIndex = (y + i) * width + (x + j);
+                            const grayValue = grayData[pixelIndex];
+                            Gx += grayValue * kx[i + 1][j + 1];
+                            Gy += grayValue * ky[i + 1][j + 1];
+                        }
+                    }
+
+                    // --- LOGIC FIX STARTS HERE ---
+                    const magnitude = Math.sqrt(Gx * Gx + Gy * Gy);
+                    const edgeValue = magnitude * strength;
+
+                    // Apply threshold to the grayscale edge value.
+                    // If the edge value is greater than the threshold, make it black (0). Otherwise, white (255).
+                    const finalColor = edgeValue > threshold ? 0 : 255;
+                    // --- LOGIC FIX ENDS HERE ---
+
+                    const outputIndex = (y * width + x) * 4;
+                    outputData[outputIndex] = finalColor;
+                    outputData[outputIndex + 1] = finalColor;
+                    outputData[outputIndex + 2] = finalColor;
+                    outputData[outputIndex + 3] = 255; // Alpha
+                }
+            }
+
+            const finalImageData = new ImageData(outputData, width, height);
+            ctx.putImageData(finalImageData, 0, 0);
+        }
+
+        function downloadImage() {
+            const link = document.createElement('a');
+            link.download = 'printmaker-image.png';
+            link.href = processedCanvas.toDataURL('image/png');
+            link.click();
+        }
+    </script>
+
+</body>
+</html>
